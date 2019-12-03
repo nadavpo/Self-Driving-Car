@@ -45,8 +45,8 @@ START_EPSILON = 1
 EPSILON_DECAY = 0.995
 MIN_EPSILON = 0.01
 
-IM_HEIGHT = 640
-IM_WIDTH = 480
+IM_HEIGHT = 600
+IM_WIDTH = 800
 
 N_ACTIONS = 3
 USE_RGB_CAMERA = True
@@ -79,7 +79,7 @@ class DoubleQKN:
         model.add(Conv2D(64, kernel_size=(5, 5), input_shape=(IM_HEIGHT, IM_WIDTH, n_channels),
                          activation='relu', kernel_initializer=he_normal(), padding='same'))
         # model.add(Conv2D(128, kernel_size=(5, 5), activation='relu', kernel_initializer=he_normal(), padding='same'))
-        # model.add(MaxPool2D(pool_size=(5, 5)))
+        model.add(MaxPool2D(pool_size=(5, 5)))
         #
         # model.add(BatchNormalization())
         # model.add(Conv2D(64, kernel_size=(5, 5), activation='relu', kernel_initializer=he_normal(), padding='same'))
@@ -143,7 +143,8 @@ class DoubleQKN:
 
     def start_training(self):
         # just to get things ready
-        dummy_x = np.random.uniform(size=(1, IM_HEIGHT, IM_WIDTH, 3)).astype(np.float32)
+        n_channels = int(USE_DEPTH_CAMERA) + int(USE_RGB_CAMERA) + int(USE_SEGMENTATION_CAMERA)
+        dummy_x = np.random.uniform(size=(1, IM_HEIGHT, IM_WIDTH, n_channels)).astype(np.float32)
         dummy_y = np.random.uniform(size=(1, 3)).astype(np.float32)
         self.model.fit(dummy_x, dummy_y, verbose=False, batch_size=1)
         self.training_initialized = True
@@ -266,7 +267,7 @@ class CarlaEnvironment:
         self.seg_data_ready = False
         self.depth_data_ready = False
 
-        return np.dstack(self.rgb_cam_data, self.depth_cam_data, self.seg_cam_data)
+        return np.dstack([self.rgb_cam_data, self.depth_cam_data, self.seg_cam_data])
 
     def step(self, action):
         if action == 0:
@@ -307,32 +308,39 @@ class CarlaEnvironment:
         self.seg_data_ready = False
         self.depth_data_ready = False
 
-        return np.dstack(self.rgb_cam_data, self.depth_cam_data, self.seg_cam_data), reward, done, None
+        return np.dstack([self.rgb_cam_data, self.depth_cam_data, self.seg_cam_data]), reward, done, None
 
     def process_collision_data(self, event):
         self.collision_hist.append(event)
 
     def process_rgb_data(self, data):
         i = np.array(data.raw_data)
+        # print(f"rgb shape = {i.shape}")
         i2 = i.reshape((IM_HEIGHT, IM_WIDTH, 4))
         i3 = i2[:, :, :3]
         if self.SHOW_CAM:
             cv2.imshow("", i3)
             cv2.waitKey(1)
-        self.rgb_cam_data = i3
+        self.rgb_cam_data = cv2.cvtColor(i3, cv2.COLOR_BGR2GRAY)
         self.rgb_data_ready = True
 
     def process_depth_data(self, data):
         i = np.array(data.raw_data)
-        i2 = i.reshape((IM_HEIGHT, IM_WIDTH, 3))
-        i3 = i2[:, :, :3]
-        self.depth_cam_data = i3
+        i2 = i.reshape((IM_HEIGHT, IM_WIDTH, 4))
+        b, g, r = i2[:, :, 0], i2[:, :, 1], i2[:, :, 2]
+        normalized = (r + g * 256 + b * 256 * 256) / (256 * 256 * 256 - 1)
+        in_meters = 1000 * normalized
+        # print(f"depth shape = {i.shape}")
+        cv2.imshow("", in_meters)
+        cv2.waitKey(1)
+        self.depth_cam_data = in_meters
         self.depth_data_ready = True
 
     def process_segmentation_data(self, data):
         i = np.array(data.raw_data)
-        i2 = i.reshape((IM_HEIGHT, IM_WIDTH, 3))
-        i3 = i2[:, :, :3]
+        # print(f"seg shape = {i.shape}")
+        i2 = i.reshape((IM_HEIGHT, IM_WIDTH, 4))
+        i3 = i2[:, :, 2]
         self.seg_cam_data = i3
         self.seg_data_ready = True
 
@@ -356,7 +364,8 @@ def train():
         curr_epsilon = START_EPSILON
         # Initialize predictions - forst prediction takes longer as of initialization that has to be done
         # It's better to do a first prediction then before we start iterating over episode steps
-        agent.predict(np.ones((IM_HEIGHT, IM_WIDTH, 3)))
+        n_channels = int(USE_DEPTH_CAMERA) + int(USE_RGB_CAMERA) + int(USE_SEGMENTATION_CAMERA)
+        agent.predict(np.ones((IM_HEIGHT, IM_WIDTH, n_channels)))
 
         # Iterate over episodes
         for episode in range(EPISODE_TO_RUN):
